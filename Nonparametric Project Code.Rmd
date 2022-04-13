@@ -1,0 +1,231 @@
+```{r}
+#Loading the Data
+
+rm(list=ls())
+data<- read.csv("https://raw.githubusercontent.com/rajdeepsaha0809/Nonpartametric-Inference-Project/main/framingham%20heart%20disease%20dataset.csv")
+head(data)
+dim(data)
+str(data)
+```
+```{r}
+#checking for missing values
+sum(is.na(data))
+cbind(lapply(lapply(data, is.na), sum))
+library(mice)
+md.pattern(data)
+library(VIM)
+aggr_plot <- aggr(data, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(data), cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern"))
+marginplot(data[c(3,15)])
+```
+```{r}
+#Imputing the missing data
+library(Rcpp)
+tempData <- mice(data, m=5, maxit= 50, meth= 'pmm', seed= 500)
+summary(tempData)
+Data <- complete(tempData, 1)
+sum(is.na(Data))
+```
+```{r}
+#Check for Data Imbalance
+attach(Data)
+sum(TenYearCHD == 1) / nrow(Data)
+sum(TenYearCHD == 0) / nrow(Data)
+library(ROSE)
+newData <- ovun.sample(TenYearCHD~., data = Data, method = "over", N = 7000)$data
+attach(newData)
+sum(TenYearCHD == 1) / nrow(newData)
+sum(TenYearCHD == 0) / nrow(newData)
+```
+```{r}
+#Feature Selection
+library(leaps)
+regfit.full = regsubsets(TenYearCHD~., data = newData, nvmax = 16)
+reg.summary = summary(regfit.full)
+reg.summary
+which.min(reg.summary$bic)
+plot(reg.summary$bic, xlab = "No. of Variables", ylab = "BIC", types = 'l')
+points(9, reg.summary$bic[9], col= "blue", cex=1.5, pch = 8)
+coef(regfit.full, 9)
+```
+```{r}
+#Data for Parametric Approach
+names(coef(regfit.full, 9))[-1]
+par_Data = newData[,-c(4, 6, 9, 12, 13, 14)]
+dim(par_Data)
+par_Data$TenYearCHD <- as.factor(par_Data$TenYearCHD)
+```
+```{r}
+#Splitting the Data
+set.seed(2022)
+index1 = sample(1:nrow(par_Data),floor(0.85*nrow(par_Data)))
+train1 = par_Data[index1, ]
+remaining1 = par_Data[-index1, ]
+index2 = sample(1:nrow(remaining1),floor(2/3*nrow(remaining1)))
+crossval1 = remaining1[index2, ]
+test1 = remaining1[-index2, ]
+actual_TenYearCHD=crossval1$TenYearCHD
+dim(train1)
+dim(crossval1)
+dim(test1)
+```
+```{r}
+library(tibble)
+library(cvms)
+f_cfm <- function(x){
+  cfm <- as.tibble(x)
+  cname <- colnames(cfm)
+  print(plot_confusion_matrix(cfm, target_col = cname[2], prediction_col =  cname[1], counts_col = cname[3]))
+}
+```
+
+```{r}
+#Logistic Regression
+attach(par_Data)
+TenYearCHD <- as.factor(TenYearCHD)
+threshold <- seq(0.1, 0.9, 0.01)
+fscore <- array(0)
+for(i in 1:length(threshold)){
+  logistic.fit <- glm(TenYearCHD~., data = train1, family = binomial)
+  logistic.probs <- predict(logistic.fit, crossval1, type = "response")
+  logistic.pred <- rep("0", nrow(crossval1))
+  logistic.pred[logistic.probs > threshold[i]]= "1"
+  tab <- table(logistic.pred, crossval1$TenYearCHD)
+  prec <- tab[2,2]/(tab[2,2] + tab[2,1])
+  #print(prec)
+  recall <- tab[2,2]/(tab[2,2] + tab[1,2])
+  #print(recall)
+  fscore[i] <- (2*prec*recall)/(prec + recall)
+}
+data.frame(threshold, fscore)
+max_acc <- which.max(fscore)
+paste("Maximum F1-score is for thresold value of ", threshold[max_acc], " and is = ",round(fscore[max_acc],4))
+
+logistic.fit <- glm(TenYearCHD~., data = crossval1, family = binomial)
+logistic.probs <- predict(logistic.fit, crossval1, type = "response")
+logistic.pred <- rep(0, nrow(crossval1))
+logistic.pred[logistic.probs > threshold[max_acc]] = 1
+actual <- crossval1$TenYearCHD
+logistic_table <- table(logistic.pred, actual)
+f_cfm(logistic_table)
+```
+```{r}
+#We will use data with all the features for nonparametric approach
+finalData <- newData
+attach(finalData)
+finalData$TenYearCHD <- as.factor(finalData$TenYearCHD)
+set.seed(2022)
+index1 = sample(1:nrow(finalData),floor(0.85*nrow(finalData)))
+train = finalData[index1, ]
+remaining = finalData[-index1, ]
+index2 = sample(1:nrow(remaining),floor(2/3*nrow(remaining)))
+crossval = remaining[index2, ]
+test = remaining[-index2, ]
+actual_TenYearCHD=crossval$TenYearCHD
+dim(train)
+dim(crossval)
+dim(test)
+```
+```{r}
+#Decision Tree
+attach(finalData)
+finalData$TenYearCHD <- as.factor(finalData$TenYearCHD)
+library(tree)
+set.seed(2022)
+tree.fit <- tree(TenYearCHD~., data= train)
+cv.tenyearchd <- cv.tree(tree.fit, FUN= prune.misclass)
+cv.tenyearchd #dev corresponds to misclassification error rate
+par(mfrow=c(1,2))
+plot(cv.tenyearchd$size, cv.tenyearchd$dev, type= "b")
+plot(cv.tenyearchd$k, cv.tenyearchd$dev, type= "b")
+prune.tree <- prune.misclass(tree.fit, best = 4)
+plot(prune.tree)
+text(prune.tree, pretty = 0)
+tree.pred <- predict(prune.tree, crossval, type = "class")
+tree_table <- table(tree.pred, actual)
+f_cfm(tree_table)
+```
+```{r}
+#Random Forest
+set.seed(2022)
+library(randomForest)
+used_pred <- floor(sqrt(ncol(finalData)))
+rf.fit <- randomForest(TenYearCHD~., data = train, mtry = used_pred,
+           importance = TRUE, maxdepth = 8)
+rf.pred <- predict(rf.fit, newdata = crossval)
+rf_table <- table(rf.pred, actual)
+f_cfm(rf_table)
+```
+```{r}
+#Calculation of F_Score for Each Method
+
+#Logistic Regression
+p1 <- logistic_table[1,1]/(logistic_table[1,1]+ logistic_table[1,2])
+r1 <- logistic_table[1,1]/(logistic_table[1,1]+ logistic_table[2,1])
+f_logistic <- round(2*p1*r1/(p1+r1), 4)
+f_logistic
+
+#Decision Tree
+p2 <- tree_table[1,1]/(tree_table[1,1]+ tree_table[1,2])
+r2 <- tree_table[1,1]/(tree_table[1,1]+ tree_table[2,1])
+f_tree <- round(2*p2*r2/(p2+r2), 4)
+f_tree
+
+#Random Forest
+p3 <- rf_table[1,1]/(rf_table[1,1]+ rf_table[1,2])
+r3 <- rf_table[1,1]/(rf_table[1,1]+ rf_table[2,1])
+f_forest <- round(2*p3*r3/(p3+r3), 4)
+f_forest
+
+paste("We have got the maximum F-Score for Random Forest which is", round(f_forest,4))
+```
+```{r}
+#Plotting ROC curve
+
+#Logistic Regression
+library(pROC)
+logistic_prob = predict(logistic.fit, newdata = crossval1, type = "response")
+logistic_roc = roc(crossval1$TenYearCHD ~ logistic_prob, plot = TRUE, print.auc = TRUE)
+paste("Area under the curve is",round(auc(logistic_roc), 4))
+
+#Decision Tree
+tree_predict= predict(prune.tree, crossval, type="vector")
+tree_roc = roc(crossval$TenYearCHD~tree_predict[,2], plot = TRUE, print.auc = TRUE)
+paste("Area under the curve is",round(auc(tree_roc), 4))
+
+#Random Forest
+rf_predict= predict(rf.fit, crossval, type="prob")
+rf_roc = roc(crossval$TenYearCHD~rf_predict[,2], plot = TRUE, print.auc = TRUE)
+paste("Area under the curve is",round(auc(rf_roc), 4))
+```
+
+```{r}
+library(formattable)
+data_frame <- data.frame(c("Logistic Regression", "Decision Tree", "Random Forest"), c(f_logistic, f_tree, f_forest),c(round(auc(logistic_roc), 4), round(auc(tree_roc), 4), round(auc(rf_roc), 4) ))
+colnames(data_frame) <- c("Method", "F-Score", "AUC")
+formattable(data_frame, list('Method' = formatter("span", style = ~ style(color = "Blue",font.weight = "bold"))))
+
+```
+
+
+```{r}
+#Final Fit
+final_fit <- predict(rf.fit, newdata = test)
+actual_test <- test$TenYearCHD
+final_rf_table <- table(final_fit, actual_test)
+f_cfm(final_rf_table)
+```
+```{r}
+#Evaluation Metric for Test Set
+
+#F_Score
+p <- final_rf_table[1,1]/(final_rf_table[1,1]+ final_rf_table[1,2])
+r <- final_rf_table[1,1]/(final_rf_table[1,1]+ final_rf_table[2,1])
+F <- round(2*p*r/(p+r), 4)
+F 
+
+
+rf_predict_test= predict(rf.fit, test, type="prob")
+tree_roc_test = roc(test$TenYearCHD~rf_predict_test[,2], plot = TRUE, print.auc = TRUE)
+paste("Area under the curve is",round(auc(tree_roc_test),2))
+```
+
