@@ -48,6 +48,7 @@ plot(reg.summary$bic, xlab = "No. of Variables", ylab = "BIC", types = 'l')
 points(6, reg.summary$bic[6], col= "blue", cex=1.5, pch = 8)
 coef(regfit.full, 6)
 ```
+
 ```{r}
 #Data for Parametric Approach
 names(coef(regfit.full, 6))[-1]
@@ -109,13 +110,14 @@ actual <- crossval1$TenYearCHD
 logistic_table <- table(logistic.pred, actual)
 f_cfm(logistic_table)
 ```
+
 ```{r}
 #We will use data with all the features for nonparametric approach
 finalData <- newData
 attach(finalData)
 finalData$TenYearCHD <- as.factor(finalData$TenYearCHD)
 set.seed(2022)
-index1 = sample(1:nrow(finalData),floor(0.85*nrow(finalData)))
+index1 = sample(1:nrow(finalData),floor(0.85*nrow(finalData))) ##Use same split for logistic regression and RF
 train = finalData[index1, ]
 remaining = finalData[-index1, ]
 index2 = sample(1:nrow(remaining),floor(2/3*nrow(remaining)))
@@ -126,6 +128,7 @@ dim(train)
 dim(crossval)
 dim(test)
 ```
+
 ```{r}
 #Decision Tree
 attach(finalData)
@@ -156,6 +159,23 @@ rf.pred <- predict(rf.fit, newdata = crossval)
 rf_table <- table(rf.pred, actual)
 f_cfm(rf_table)
 ```
+
+```{r}
+#BART
+set.seed(2022)
+library(BART)
+bart.fit <-  pbart(x.train=train[,-16], y.train= ifelse(train$TenYearCHD==1,TRUE,FALSE) ,ndpost=1000,a=0.95,b=2,ntree = 200)
+
+bart.pred<-predict(bart.fit,newdata = crossval[,-16])  
+prob_pred<-bart.pred$prob.test.mean
+bart.pred<-  ifelse((prob_pred>0.5),1,0)
+bart_table <- table(bart.pred, actual)
+f_cfm(bart_table)
+```
+
+
+
+
 ```{r}
 #Calculation of F_Score for Each Method
 
@@ -177,6 +197,12 @@ r3 <- rf_table[1,1]/(rf_table[1,1]+ rf_table[2,1])
 f_forest <- round(2*p3*r3/(p3+r3), 4)
 f_forest
 
+#BART
+p4 <- bart_table[1,1]/(bart_table[1,1]+ bart_table[1,2])
+r4 <- bart_table[1,1]/(bart_table[1,1]+ bart_table[2,1])
+f_bart <- round(2*p4*r4/(p4+r4), 4)
+f_bart
+
 paste("We have got the maximum F-Score for Random Forest which is", round(f_forest,4))
 ```
 ```{r}
@@ -197,11 +223,15 @@ paste("Area under the curve is",round(auc(tree_roc), 4))
 rf_predict= predict(rf.fit, crossval, type="prob")
 rf_roc = roc(crossval$TenYearCHD~rf_predict[,2], plot = TRUE, print.auc = TRUE)
 paste("Area under the curve is",round(auc(rf_roc), 4))
+
+#BART
+bart_roc = roc(crossval$TenYearCHD~prob_pred, plot = TRUE, print.auc = TRUE)
+paste("Area under the curve is",round(auc(bart_roc), 4))
 ```
 
 ```{r}
 library(formattable)
-data_frame <- data.frame(c("Logistic Regression", "Decision Tree", "Random Forest"), c(f_logistic, f_tree, f_forest),c(round(auc(logistic_roc), 4), round(auc(tree_roc), 4), round(auc(rf_roc), 4) ))
+data_frame <- data.frame(c("Logistic Regression", "Decision Tree", "Random Forest","BART"), c(f_logistic, f_tree, f_forest,f_bart),c(round(auc(logistic_roc), 4), round(auc(tree_roc), 4), round(auc(rf_roc), 4), round(auc(bart_roc), 4)))
 colnames(data_frame) <- c("Method", "F-Score", "AUC")
 formattable(data_frame, list('Method' = formatter("span", style = ~ style(color = "Blue",font.weight = "bold"))))
 paste("Since F-Score and AUC are the highest for Random Forest, we will choos ethis model to be the best one.")
@@ -214,6 +244,7 @@ final_fit <- predict(rf.fit, newdata = test)
 actual_test <- test$TenYearCHD
 final_rf_table <- table(final_fit, actual_test)
 f_cfm(final_rf_table)
+
 ```
 ```{r}
 #Evaluation Metric for Test Set
