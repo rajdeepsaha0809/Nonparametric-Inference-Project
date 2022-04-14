@@ -145,7 +145,7 @@ prune.tree <- prune.misclass(tree.fit, best = 4)
 plot(prune.tree)
 text(prune.tree, pretty = 0)
 tree.pred <- predict(prune.tree, crossval, type = "class")
-tree_table <- table(tree.pred, actual)
+tree_table <- table(tree.pred, actual_TenYearCHD)
 f_cfm(tree_table)
 ```
 ```{r}
@@ -153,10 +153,10 @@ f_cfm(tree_table)
 set.seed(2022)
 library(randomForest)
 used_pred <- floor(sqrt(ncol(finalData)))
-rf.fit <- randomForest(TenYearCHD~., data = train, mtry = used_pred,
+rf.fit <- randomForest(TenYearCHD ~ ., data = train, mtry = used_pred,
            importance = TRUE, maxdepth = 8)
 rf.pred <- predict(rf.fit, newdata = crossval)
-rf_table <- table(rf.pred, actual)
+rf_table <- table(rf.pred, actual_TenYearCHD)
 f_cfm(rf_table)
 ```
 
@@ -169,7 +169,7 @@ bart.fit <-  pbart(x.train=train[,-16], y.train= ifelse(train$TenYearCHD==1,TRUE
 bart.pred<-predict(bart.fit,newdata = crossval[,-16])  
 prob_pred<-bart.pred$prob.test.mean
 bart.pred<-  ifelse((prob_pred>0.5),1,0)
-bart_table <- table(bart.pred, actual)
+bart_table <- table(bart.pred, actual_TenYearCHD)
 f_cfm(bart_table)
 ```
 
