@@ -1,0 +1,236 @@
+---
+title: "Simulation-RF & BART"
+author: "Ritwik Vashistha"
+date: "April 13, 2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(BART)
+library(randomForest)
+library(reshape2)
+library(ggplot2)
+```
+
+## Data Generation
+
+
+```{r}
+
+':=' <- function(lhs, rhs) {
+  frame <- parent.frame()
+  lhs <- as.list(substitute(lhs))
+  if (length(lhs) > 1)
+    lhs <- lhs[-1]
+  if (length(lhs) == 1) {
+    do.call(`=`, list(lhs[[1]], rhs), envir=frame)
+    return(invisible(NULL)) 
+  }
+  if (is.function(rhs) || is(rhs, 'formula'))
+    rhs <- list(rhs)
+  if (length(lhs) > length(rhs))
+    rhs <- c(rhs, rep(list(NULL), length(lhs) - length(rhs)))
+  for (i in 1:length(lhs))
+    do.call(`=`, list(lhs[[i]], rhs[[i]]), envir=frame)
+  return(invisible(NULL)) 
+}
+
+logistic<-function(x)
+{
+  return(1/(1+exp(-x)))
+}
+
+rmvn <- function(n, mu=0, V = matrix(1)){
+  p <- length(mu)
+  if(any(is.na(match(dim(V),p))))
+    stop("Dimension problem!")
+  D <- chol(V)
+  (matrix(rnorm(n*p), ncol=p)%*%D + rep(mu,rep(n,p)))
+}
+
+
+data_gen_1<-function(n,p)
+{
+  X <- lapply(1:p,function(x) runif(n,0,1))
+  X<-data.frame(X)
+  colnames(X)<-NULL
+  X<-as.matrix(X)
+  ep<-rnorm(n,0,1)
+  
+  Ystar=10*sin(pi*X[,1]*X[,2])+ 15*(X[,3]-0.5)^2 - 15*X[,4] + 5*X[,5] + ep
+  
+  prob=sapply(1:n, function(x) logistic(Ystar[x]))
+  Y=rbinom(n,1,prob)
+  # return(  sum(rbinom(100,1,prob)))
+  return(list(X,Y))
+}
+
+
+data_gen_2<-function(n,p)
+{
+  X <- lapply(1:p,function(x) runif(n,0,1))
+  X<-data.frame(X)
+  colnames(X)<-NULL
+  X<-as.matrix(X)
+  ep<-rnorm(n,0,1)
+  Ystar=10*sin(pi*X[,1]*X[,2])+ 15*(X[,3]-0.5)^2 - 15*X[,4] + 5*X[,5] + ep
+  # prob=sapply(1:n, function(x) logistic(Ystar[x]))
+  # Y=rbinom(n,1,prob)
+  # return(  sum(rbinom(100,1,prob)))
+  return(list(X,Ystar))
+}
+
+data_gen_3<-function(n,p,p_0)
+{
+  ma<-matrix(data=0.3,nrow=p,ncol = p)
+  diag(ma)<-rep(1,p)
+  X<-rmvn(n,rep(0,p),ma)
+  beta<-c(rep(3,p_0),rep(0,p-p_0))
+  ep<-rcauchy(n,0,1)
+  Y=X%*%beta + ep
+  prob=sapply(1:n, function(x) logistic(Y[x]))
+  Y=rbinom(n,1,prob)
+  return(list(X,Y))
+}
+
+data_gen_4<-function(n,p,p_0)
+{
+  X<-rmvn(n,rep(0,p),diag(p))
+  beta<-c(rep(3,p_0),rep(0,p-p_0))
+  ep<-rnorm(n,0,1)
+  Y=X%*%beta + ep
+  prob=sapply(1:n, function(x) logistic(Y[x]))
+  Y=rbinom(n,1,prob)
+  return(list(X,Y))
+}
+
+1+1
+```
+
+## Implimentation
+
+You can also embed plots, for example:
+
+```{r , echo=FALSE}
+p<-c(20,50,100,500,1000)
+n<-1000
+rf_error<-matrix(data=NA,nrow=50,ncol=5)
+bart_error<-matrix(data=NA,nrow=50,ncol=5)
+
+for(i in 1:50){  
+  for(j in 1:5)
+  {
+    X=matrix(data=NA,n,n)
+    Y=rep(NA,n)
+    c(X,Y):=data_gen_1(n,p[j])
+    simdata=data.frame(response= as.factor(Y),X)
+    train_sample<-sample(1:round(0.7*n),replace=FALSE)
+    simdata_train=simdata[train_sample,]
+    simdata_test=simdata[-train_sample,]
+    rf_fit<-randomForest(response ~ ., data=simdata_train,xtest=simdata_test[,-1])
+    rf_error[i,j]<-1 - sum(simdata_test$response==rf_fit$test$predicted)/(0.3*n)
+    
+    post <- pbart(x.train=simdata_train[,-1], y.train= ifelse(simdata_train$response==1,TRUE,FALSE) ,x.test=simdata_test[,-1],ndpost=5000)
+    prob_pred<-pnorm(post$yhat.test)
+    prob_pred<-sapply(1:round(0.3*n),function(x) mean(prob_pred[,x]))
+    class_pred<-  ifelse((prob_pred>0.5),1,0)
+    # pred<-predict(post,new_data = simdata_test[,-1],type="class",prob_rule_class = 0.5)
+    bart_error[i,j]<- 1 - sum(simdata_test$response==class_pred)/(0.3*n)
+  }
+}  
+
+rf_error_df<-data.frame(rf_error[,1:5])
+rf_error_df<-melt(rf_error_df)
+bart_error_df<-data.frame(bart_error[,1:5])
+bart_error_df<-melt(bart_error_df)
+error_df<-rbind(rf_error_df,bart_error_df)
+error_df['Model']<-c(rep("RF",250),rep("BART",250))
+ggplot(error_df, aes(x=variable, y=value,fill=Model)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=7,
+                outlier.size=1)+scale_x_discrete(name="Number of (Relevant, Noise) variables",labels=c("X1" =   "(5,15)","X2" = "(5,45)","X3"="(5,95)","X4" = "(5,495)","X5" = "(5,995)")) + scale_y_continuous(name="Test Misclassification Error")
+
+
+
+
+
+```
+
+
+
+```{r}
+p<-c(10,20,30,50)
+p_0<-c(5,15,25,45)
+n<-1000
+rf_error_1<-matrix(data=NA,nrow=50,ncol=4)
+bart_error_1<-matrix(data=NA,nrow=50,ncol=4)
+
+for(i in 1:50){  
+  for(j in 1:4)
+  {
+    X=matrix(data=NA,n,n)
+    Y=rep(NA,n)
+    c(X,Y):=data_gen_3(n,p[j],p_0[j])
+    simdata=data.frame(response= as.factor(Y),X)
+    train_sample<-sample(1:round(0.7*n),replace=FALSE)
+    simdata_train=simdata[train_sample,]
+    simdata_test=simdata[-train_sample,]
+    rf_fit<-randomForest(response ~ ., data=simdata_train,xtest=simdata_test[,-1])
+    rf_error_1[i,j]<-1 - sum(simdata_test$response==rf_fit$test$predicted)/(0.3*n)
+    
+    post <- pbart(x.train=simdata_train[,-1], y.train= ifelse(simdata_train$response==1,TRUE,FALSE) ,x.test=simdata_test[,-1],ndpost=1000)
+    prob_pred<-pnorm(post$yhat.test)
+    prob_pred<-sapply(1:round(0.3*n),function(x) mean(prob_pred[,x]))
+    class_pred<-  ifelse((prob_pred>0.5),1,0)
+    # pred<-predict(post,new_data = simdata_test[,-1],type="class",prob_rule_class = 0.5)
+    bart_error_1[i,j]<- 1 - sum(simdata_test$response==class_pred)/(0.3*n)
+  }
+}  
+
+rf_error_df_1<-data.frame(rf_error_1)
+rf_error_df_1<-melt(rf_error_df_1)
+bart_error_df_1<-data.frame(bart_error_1)
+bart_error_df_1<-melt(bart_error_df_1)
+error_df_1<-rbind(rf_error_df_1,bart_error_df_1)
+error_df_1['Model']<-c(rep("RF",200),rep("BART",200))
+ggplot(error_df_1, aes(x=variable, y=value,fill=Model)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=7,
+                outlier.size=1)+scale_x_discrete(name="Number of (Relevant, Noise) variables",labels=c("X1" =   "(5,5)","X2" = "(15,5)","X3"="(25,5)","X4" = "(45,5)")) + scale_y_continuous(name="Test Misclassification Error")
+
+```
+
+
+```{r}
+pred_rf<-matrix(NA,100,100)
+pred_cart<-matrix(NA,100,300)
+pred_bart<-matrix(NA,100,100)
+n<-500
+p<-100
+X=matrix(data=NA,n,n)
+Y=rep(NA,n)
+c(X,Y):=data_gen_2(n,p)
+simdata=data.frame(response= Y,X)
+for(i in 1:100)
+  {
+    rf_fit<-randomForest(response ~ ., data=simdata,ntree=500)
+    pred_rf[,i]<-rf_fit$predicted
+}
+
+for(i in 1:300)
+  {
+    cart_fit<-randomForest(response ~ ., data=simdata,ntree=1,mtry=p)
+    pred_cart[,i]<-cart_fit$predicted
+    print(i)
+}
+
+var_df<-data.frame("Variance"=c(sapply(1:100,function(x) var(pred_cart[x,],na.rm = TRUE))))
+var_df['Model']<-c(rep("CART",100))
+
+
+ggplot(var_df, aes(x=Model, y=Variance)) + 
+  geom_boxplot()
+
+mean(sapply(1:100,function(x) var(pred_cart[x,],na.rm = TRUE)))
+mean(sapply(1:100,function(x) var(pred_rf[x,],na.rm = TRUE)))
+
+```
+
